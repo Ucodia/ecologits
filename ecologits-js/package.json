@@ -1,0 +1,8 @@
+{
+  "name": "ecologits-js",
+  "version": "0.1.0",
+  "description": "JavaScript port of the EcoLogits library",
+  "main": "src/index.js",
+  "type": "module",
+  "keywords": ["ecologits", "energy", "llm"]
+}
