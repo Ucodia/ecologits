@@ -1,63 +1,59 @@
-// EcoLogits JavaScript implementation
-// Compute LLM environmental impacts similar to ecologits.tracers.utils.llm_impacts
+// EcoLogits TypeScript implementation
+// Provides the same llmImpact function as ecologits.js with basic typings
 
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// Helpers for RangeValue operations
-function isRange(v) {
+interface RangeValue { min: number; max: number }
+
+function isRange(v: unknown): v is RangeValue {
   return typeof v === 'object' && v !== null && 'min' in v && 'max' in v;
 }
 
-function toRange(v) {
+function toRange(v: number | RangeValue): RangeValue {
   if (isRange(v)) return v;
   return { min: v, max: v };
 }
 
-function addRange(a, b) {
-  a = toRange(a);
-  b = toRange(b);
-  return { min: a.min + b.min, max: a.max + b.max };
+function addRange(a: number | RangeValue, b: number | RangeValue): RangeValue {
+  const ra = toRange(a);
+  const rb = toRange(b);
+  return { min: ra.min + rb.min, max: ra.max + rb.max };
 }
 
-function mulRange(a, scalar) {
-  a = toRange(a);
-  return { min: a.min * scalar, max: a.max * scalar };
+function mulRange(a: number | RangeValue, scalar: number): RangeValue {
+  const ra = toRange(a);
+  return { min: ra.min * scalar, max: ra.max * scalar };
 }
 
-function ltRange(a, b) {
-  a = toRange(a);
-  return a.max < b;
+function ltRange(a: number | RangeValue, b: number): boolean {
+  const ra = toRange(a);
+  return ra.max < b;
 }
 
-// Load models and electricity mixes
 const dataDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'data');
 const models = JSON.parse(fs.readFileSync(path.join(dataDir, 'models.json'), 'utf8'));
-const electricityMixes = (() => {
-  const csv = fs
-    .readFileSync(path.join(dataDir, "electricity_mixes.csv"), "utf8")
-    .trim()
-    .split("\n");
-  const result = {};
+const electricityMixes: Record<string, {zone: string; adpe: number; pe: number; gwp: number;}> = (() => {
+  const csv = fs.readFileSync(path.join(dataDir, 'electricity_mixes.csv'), 'utf8').trim().split('\n');
+  const result: Record<string, {zone: string; adpe: number; pe: number; gwp: number;}> = {};
   for (let i = 1; i < csv.length; i++) {
-    const [zone, adpe, pe, gwp] = csv[i].split(",");
+    const [zone, adpe, pe, gwp] = csv[i].split(',');
     result[zone] = { zone, adpe: parseFloat(adpe), pe: parseFloat(pe), gwp: parseFloat(gwp) };
   }
   return result;
 })();
 
-function findModel(provider, name) {
-  const alias = (models.aliases || []).find(a => a.provider === provider && a.name === name);
+function findModel(provider: string, name: string) {
+  const alias = (models.aliases || []).find((a: any) => a.provider === provider && a.name === name);
   if (alias) name = alias.alias;
-  return (models.models || []).find(m => m.provider === provider && m.name === name);
+  return (models.models || []).find((m: any) => m.provider === provider && m.name === name);
 }
 
-function findMix(zone) {
+function findMix(zone: string) {
   return electricityMixes[zone];
 }
 
-// Constants copied from Python implementation
 const MODEL_QUANTIZATION_BITS = 4;
 const GPU_ENERGY_ALPHA = 8.91e-8;
 const GPU_ENERGY_BETA = 1.43e-6;
@@ -77,15 +73,16 @@ const SERVER_EMBODIED_IMPACT_PE = 38000;
 const HARDWARE_LIFESPAN = 5 * 365 * 24 * 60 * 60;
 const DATACENTER_PUE = 1.2;
 
-function computeImpactsOnce({ activeParams, totalParams, outputTokens, requestLatency, mix }) {
+function computeImpactsOnce(opts: { activeParams: number; totalParams: number; outputTokens: number; requestLatency: number; mix: any }): Record<string, RangeValue> {
+  const { activeParams, totalParams, outputTokens, requestLatency, mix } = opts;
   const energyPerToken = GPU_ENERGY_ALPHA * activeParams + GPU_ENERGY_BETA;
-  const gpuEnergy = {
+  const gpuEnergy: RangeValue = {
     min: Math.max(0, outputTokens * (energyPerToken - 1.96 * GPU_ENERGY_STDEV)),
     max: outputTokens * (energyPerToken + 1.96 * GPU_ENERGY_STDEV)
   };
 
   const latencyPerToken = GPU_LATENCY_ALPHA * activeParams + GPU_LATENCY_BETA;
-  const latencyInterval = {
+  const latencyInterval: RangeValue = {
     min: Math.max(0, outputTokens * (latencyPerToken - 1.96 * GPU_LATENCY_STDEV)),
     max: outputTokens * (latencyPerToken + 1.96 * GPU_LATENCY_STDEV)
   };
@@ -117,17 +114,18 @@ function computeImpactsOnce({ activeParams, totalParams, outputTokens, requestLa
     request_usage_pe: usagePE,
     request_embodied_gwp: embodiedGWP,
     request_embodied_adpe: embodiedADPe,
-    request_embodied_pe: embodiedPE
+    request_embodied_pe: embodiedPE,
   };
 }
 
-function mergeRanges(a, b) {
-  a = toRange(a);
-  b = toRange(b);
-  return { min: Math.min(a.min, b.min), max: Math.max(a.max, b.max) };
+function mergeRanges(a: RangeValue | number, b: RangeValue | number): RangeValue {
+  const ra = toRange(a);
+  const rb = toRange(b);
+  return { min: Math.min(ra.min, rb.min), max: Math.max(ra.max, rb.max) };
 }
 
-function computeLLMImpacts({ activeParams, totalParams, outputTokens, requestLatency, mix }) {
+function computeLLMImpacts(opts: { activeParams: number | RangeValue; totalParams: number | RangeValue; outputTokens: number; requestLatency: number; mix: any }) {
+  const { activeParams, totalParams, outputTokens, requestLatency, mix } = opts;
   const activeVals = isRange(activeParams) ? [activeParams.min, activeParams.max] : [activeParams, activeParams];
   const totalVals = isRange(totalParams) ? [totalParams.min, totalParams.max] : [totalParams, totalParams];
 
@@ -140,7 +138,7 @@ function computeLLMImpacts({ activeParams, totalParams, outputTokens, requestLat
     'request_embodied_adpe',
     'request_embodied_pe'
   ];
-  const results = {};
+  const results: Record<string, RangeValue> = {};
   for (let i = 0; i < activeVals.length; i++) {
     const res = computeImpactsOnce({
       activeParams: activeVals[i],
@@ -185,7 +183,9 @@ function computeLLMImpacts({ activeParams, totalParams, outputTokens, requestLat
   };
 }
 
-export default function llmImpact(provider, modelName, outputTokenCount, requestLatency, electricityMixZone = 'WOR') {
+type Impact = ReturnType<typeof computeLLMImpacts>;
+
+export default function llmImpact(provider: string, modelName: string, outputTokenCount: number, requestLatency: number, electricityMixZone: string = 'WOR'): Impact {
   const model = findModel(provider, modelName);
   if (!model) {
     throw new Error(`Could not find model \`${modelName}\` for ${provider} provider.`);
@@ -195,10 +195,11 @@ export default function llmImpact(provider, modelName, outputTokenCount, request
     throw new Error(`Could not find electricity mix for zone \`${electricityMixZone}\`.`);
   }
 
-  let totalParams, activeParams;
+  let totalParams: number | RangeValue;
+  let activeParams: number | RangeValue;
   if (model.architecture.type === 'moe') {
-    totalParams = model.architecture.parameters.total;
-    activeParams = model.architecture.parameters.active;
+    totalParams = (model.architecture.parameters as any).total;
+    activeParams = (model.architecture.parameters as any).active;
   } else {
     totalParams = model.architecture.parameters;
     activeParams = model.architecture.parameters;
